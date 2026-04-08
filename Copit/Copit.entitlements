@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copit.entitlements
+  
+  CGEventTap を使ったグローバルキー監視に必要なエンタイトルメント。
+  
+  注意: com.apple.security.app-sandbox を true にする場合、
+        CGEvent の .cghidEventTap は制限されます。
+        開発/テスト段階では Sandbox を無効（false）のまま進めてください。
+        App Store 配布する場合は別途対応が必要です。
+-->
+<plist version="1.0">
+<dict>
+    <!-- サンドボックス: App Store外配布は false で問題なし -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- ハードウェアアクセラレーション -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <false/>
+    
+</dict>
+</plist>

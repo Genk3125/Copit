@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist - コピット (Copit)
+  
+  重要なキーの説明:
+  - LSUIElement: YES → Dockアイコンを非表示（メニューバー常駐型）
+  - NSAccessibilityUsageDescription: アクセシビリティ権限の理由説明文
+-->
+<plist version="1.0">
+<dict>
+    <!-- アプリ基本情報 -->
+    <key>CFBundleIdentifier</key>
+    <string>com.yourname.copit</string>
+    
+    <key>CFBundleName</key>
+    <string>Copit</string>
+    
+    <key>CFBundleDisplayName</key>
+    <string>コピット</string>
+    
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    
+    <!-- ★ Dockアイコンを非表示にしてメニューバー常駐型にする ★ -->
+    <key>LSUIElement</key>
+    <true/>
+    
+    <!-- macOS 最小バージョン -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    
+    <!-- ★ アクセシビリティ権限の使用目的説明（必須） ★
+         システム設定のダイアログに表示されるテキスト -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>コピットは、グローバルショートカット（⌘+Shift+C / ⌘+Shift+V）の検知と、テキストの自動ペーストを行うためにアクセシビリティ機能を使用します。</string>
+    
+    <!-- アプリカテゴリ -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    
+    <!-- Dock メニューから「このアプリをこのスペースに割り当てる」等を無効化 -->
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    
+</dict>
+</plist>
