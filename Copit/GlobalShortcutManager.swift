@@ -13,7 +13,10 @@ final class GlobalShortcutManager {
     nonisolated(unsafe) static let syntheticTag: Int64 = 0x434F504954
 
     func start() {
-        guard AXIsProcessTrusted() else { return }
+        guard AXIsProcessTrusted() else {
+            print("[Copit] ⚠️ Accessibility not trusted – shortcuts disabled")
+            return
+        }
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
         let ptr  = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let cb: CGEventTapCallBack = { _, type, event, refcon -> Unmanaged<CGEvent>? in
@@ -25,11 +28,15 @@ final class GlobalShortcutManager {
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: cb, userInfo: ptr
-        ) else { return }
+        ) else {
+            print("[Copit] ⚠️ CGEvent.tapCreate FAILED – check Sandbox and Accessibility settings")
+            return
+        }
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        print("[Copit] ✅ Event tap created – ⌘⇧C / ⌘⇧V active")
     }
 
     func stop() {
@@ -48,9 +55,12 @@ final class GlobalShortcutManager {
 
         let flags = event.flags
         let key   = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        // Skip our own synthetic events
         if event.getIntegerValueField(.eventSourceUserData) == GlobalShortcutManager.syntheticTag {
             return event
         }
+
         guard flags.contains(.maskCommand),
               !flags.contains(.maskAlternate),
               !flags.contains(.maskControl) else { return event }
@@ -67,6 +77,7 @@ final class GlobalShortcutManager {
             return event
         }
 
+        // Normal ⌘V → play paste sound
         if key == GlobalShortcutManager.kVK_V {
             MainActor.assumeIsolated { play("Purr") }
             return event
@@ -76,28 +87,40 @@ final class GlobalShortcutManager {
     }
 
     private func performSpecialCopy() {
+        print("[Copit] ⌘⇧C detected – starting special copy")
+        ClipboardManager.shared.suppressPolling(for: 0.6)
+
         let pb       = NSPasteboard.general
         let snapshot = PasteboardSnapshot(pb)
         let before   = pb.changeCount
+
         postCmd(GlobalShortcutManager.kVK_C)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let pb   = NSPasteboard.general
                 let text = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                defer {
-                    ClipboardManager.shared.ignoreNextWrite()
-                    snapshot.restore(to: pb)
+
+                // Restore original clipboard
+                snapshot.restore(to: pb)
+
+                guard pb.changeCount != before, let text, !text.isEmpty else {
+                    print("[Copit] ⚠️ Special copy: no text captured")
+                    return
                 }
-                guard pb.changeCount != before, let text, !text.isEmpty else { return }
                 self.onSpecialCopy?(text)
                 play("Submarine")
+                print("[Copit] ✅ Special copy: \"\(text.prefix(40))\"")
             }
         }
     }
 
     private func postCmd(_ key: CGKeyCode) {
-        let src = CGEventSource(stateID: .hidSystemState)
+        guard let src = CGEventSource(stateID: .hidSystemState) else {
+            print("[Copit] ⚠️ CGEventSource creation failed")
+            return
+        }
         let dn  = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         let up  = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
         let tag = GlobalShortcutManager.syntheticTag

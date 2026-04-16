@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - PanelViewModel
@@ -119,7 +120,7 @@ final class PanelController {
 
     func paste() {
         guard let text = vm.selectedItem?.text else { return }
-        ClipboardManager.shared.ignoreNextWrite()
+        ClipboardManager.shared.suppressPolling(for: 0.5)
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)

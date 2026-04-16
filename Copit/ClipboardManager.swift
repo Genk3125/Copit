@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 // MARK: - ClipItem
 
@@ -18,7 +19,7 @@ final class ClipboardManager: ObservableObject {
 
     private var timer: Timer?
     private var lastCount: Int
-    private var skipCount: Int?
+    private var suppressedUntil = Date.distantPast
 
     private init() { lastCount = NSPasteboard.general.changeCount }
 
@@ -31,17 +32,22 @@ final class ClipboardManager: ObservableObject {
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        print("[Copit] ✅ Clipboard watching started")
     }
 
-    func ignoreNextWrite() { skipCount = NSPasteboard.general.changeCount + 1 }
+    func suppressPolling(for duration: TimeInterval) {
+        suppressedUntil = max(suppressedUntil, Date().addingTimeInterval(duration))
+    }
 
     private func poll() {
         let c = NSPasteboard.general.changeCount
         guard c != lastCount else { return }
-        let prev = lastCount
         lastCount = c
-        if let s = skipCount, c == s { skipCount = nil; return }
-        if c > prev { play("Frog") }
+        guard Date() >= suppressedUntil else { return }
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        add(text)
+        play("Frog")
     }
 
     // MARK: 履歴操作
@@ -77,5 +83,5 @@ final class ClipboardManager: ObservableObject {
 // MARK: - サウンド
 
 func play(_ name: String) {
-    NSSound(contentsOfFile: "/System/Library/Sounds/\(name).aiff", byReference: false)?.play()
+    NSSound(named: NSSound.Name(name))?.play()
 }

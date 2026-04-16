@@ -250,26 +250,4 @@ struct HintLabel: View {
     }
 }
 
-// MARK: - Preview
 
-#if DEBUG
-#Preview {
-    let vm = PanelViewModel()
-    vm.items = [
-        ClipItem(text: "Hello, World!"),
-        ClipItem(text: "SwiftUI で macOS アプリ開発", isFavorite: true),
-        ClipItem(text: "Lorem ipsum dolor sit amet consectetur\nadipiscing elit"),
-        ClipItem(text: "第四の文字列サンプルテキスト"),
-        ClipItem(text: "Another clipboard entry for testing"),
-    ]
-    vm.selectedIndex = 0
-
-    return CopitListView(
-        viewModel: vm,
-        onPaste: {},
-        onDeleteSelected: {},
-        onToggleFavoriteSelected: {}
-    )
-    .frame(width: 440, height: 420)
-}
-#endif

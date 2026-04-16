@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: PanelController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        print("[Copit] ✅ App launched")
         NSApp.setActivationPolicy(.accessory)
         requestAccessibility()
         setupMenuBar()
@@ -20,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestAccessibility() {
         let opts: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true]
-        AXIsProcessTrustedWithOptions(opts)
+        let trusted = AXIsProcessTrustedWithOptions(opts)
+        print("[Copit] Accessibility trusted: \(trusted)")
     }
 
     // MARK: - Menu Bar
@@ -59,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         statusItem?.menu = menu
+        print("[Copit] ✅ Menu bar setup complete")
     }
 
     @objc private func toggleLogin() {
