@@ -1,30 +1,35 @@
 // ClipboardWatcher.swift
 // システムクリップボードの changeCount を監視してコピー音を鳴らす
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import AppKit
 import Foundation
 
+/// @MainActor: NSPasteboard / Timer はメインスレッドで使う前提のため
+@MainActor
 final class ClipboardWatcher {
 
     static let shared = ClipboardWatcher()
 
-    private let pasteboard = NSPasteboard.general
     private var timer: Timer?
     private var lastChangeCount: Int
     private var ignoredChangeCount: Int?
 
     private init() {
-        self.lastChangeCount = pasteboard.changeCount
+        lastChangeCount = NSPasteboard.general.changeCount
     }
+
+    // MARK: - Public API
 
     func start() {
         guard timer == nil else { return }
+        lastChangeCount = NSPasteboard.general.changeCount
 
-        lastChangeCount = pasteboard.changeCount
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.pollPasteboard()
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.poll()
         }
-        RunLoop.main.add(timer!, forMode: .common)
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     func stop() {
@@ -32,24 +37,26 @@ final class ClipboardWatcher {
         timer = nil
     }
 
-    /// Copit 自身の pasteboard 更新による次回 changeCount を無音化する
+    /// Copit 自身の書き込みによる次回の変化音を抑制する
     func ignoreNextOwnWrite() {
-        ignoredChangeCount = pasteboard.changeCount + 1
+        ignoredChangeCount = NSPasteboard.general.changeCount + 1
     }
 
-    private func pollPasteboard() {
-        let currentChangeCount = pasteboard.changeCount
-        guard currentChangeCount != lastChangeCount else { return }
+    // MARK: - Private
 
-        let previousChangeCount = lastChangeCount
-        lastChangeCount = currentChangeCount
+    private func poll() {
+        let current = NSPasteboard.general.changeCount
+        guard current != lastChangeCount else { return }
 
-        if let ignoredChangeCount, currentChangeCount == ignoredChangeCount {
-            self.ignoredChangeCount = nil
+        let previous = lastChangeCount
+        lastChangeCount = current
+
+        if let ignored = ignoredChangeCount, current == ignored {
+            ignoredChangeCount = nil
             return
         }
 
-        if currentChangeCount > previousChangeCount {
+        if current > previous {
             SoundManager.shared.playCopy()
         }
     }

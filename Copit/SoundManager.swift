@@ -1,44 +1,27 @@
 // SoundManager.swift
-// コピット専用のサウンドエフェクト管理
+// コピット専用サウンドエフェクト管理
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import AppKit
 
+/// @MainActor: NSSound は UI スレッドで使う前提のため
+@MainActor
 final class SoundManager {
 
     static let shared = SoundManager()
     private init() {}
 
-    // macOS 標準サウンド。差し替えるならこの定数だけ変更すればよい。
-    private let copySoundName = "Frog"
-    private let specialCopySoundName = "Submarine"
-    private let pasteSoundName = "Purr"
-
     // MARK: - Public API
 
-    /// コピーしたときの音
-    func playCopy() {
-        playSound(named: copySoundName)
-    }
-
-    /// 特殊コピーしたときの音
-    func playSpecialCopy() {
-        playSound(named: specialCopySoundName)
-    }
-
-    /// ペーストしたときの音
-    func playPaste() {
-        playSound(named: pasteSoundName)
-    }
+    func playCopy()        { play("Frog")      }
+    func playSpecialCopy() { play("Submarine") }
+    func playPaste()       { play("Purr")      }
 
     // MARK: - Private
 
-    private func playSound(named name: String) {
-        // /System/Library/Sounds/ から直接パスで読み込む
+    private func play(_ name: String) {
         let path = "/System/Library/Sounds/\(name).aiff"
-        guard let sound = NSSound(contentsOfFile: path, byReference: false) else {
-            print("[Copit] サウンドが見つかりません: \(path)")
-            return
-        }
+        guard let sound = NSSound(contentsOfFile: path, byReference: false) else { return }
         sound.play()
     }
 }

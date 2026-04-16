@@ -1,23 +1,20 @@
 // CopitViewModel.swift
 // ペーストUIのリスト状態を管理する ObservableObject
-// SwiftUI の CopitListView がこれを監視して再描画される
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import Foundation
-import Combine  // @Published に必要
 
+/// @MainActor: @Published プロパティを UI スレッドで安全に更新するため
+@MainActor
 final class CopitViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    /// 表示するテキスト一覧（ClipboardManager の items から同期）
     @Published var items: [ClipItem] = []
-
-    /// 現在ハイライトされているインデックス
     @Published var selectedIndex: Int = 0
 
     // MARK: - Computed
 
-    /// 現在選択中のテキスト（Enterで貼り付けるもの）
     var selectedItem: ClipItem? {
         guard !items.isEmpty, items.indices.contains(selectedIndex) else { return nil }
         return items[selectedIndex]
@@ -25,53 +22,52 @@ final class CopitViewModel: ObservableObject {
 
     // MARK: - Navigation
 
-    /// Space / ↓ キー: 選択を1つ下へ（末尾で先頭へループ）
+    /// Space / ↓: 選択を1つ下へ（末尾→先頭ループ）
     func moveDown() {
         guard !items.isEmpty else { return }
         selectedIndex = (selectedIndex + 1) % items.count
     }
 
-    /// ↑ キー: 選択を1つ上へ（先頭で末尾へループ）
+    /// ↑: 選択を1つ上へ（先頭→末尾ループ）
     func moveUp() {
         guard !items.isEmpty else { return }
         selectedIndex = (selectedIndex - 1 + items.count) % items.count
     }
 
+    /// 選択中アイテムを除去して ID を返す
     func removeSelectedItem() -> UUID? {
         guard let item = selectedItem else { return nil }
         items.removeAll { $0.id == item.id }
-        normalizeSelection()
+        clampSelection()
         return item.id
     }
 
+    /// 選択中アイテムのお気に入りをトグルして ID を返す
     func toggleFavoriteForSelectedItem() -> UUID? {
-        guard let item = selectedItem, let index = items.firstIndex(where: { $0.id == item.id }) else { return nil }
+        guard
+            let item = selectedItem,
+            let index = items.firstIndex(where: { $0.id == item.id })
+        else { return nil }
         items[index].isFavorite.toggle()
         return item.id
     }
 
     // MARK: - Sync
 
-    /// ClipboardManager の最新データをロード
+    /// ClipboardManager の最新データを反映（選択位置を可能な限り維持）
     func load(from clipItems: [ClipItem]) {
-        let previousSelectionID = selectedItem?.id
+        let prevID = selectedItem?.id
         items = clipItems
-
-        if
-            let previousSelectionID,
-            let newIndex = items.firstIndex(where: { $0.id == previousSelectionID })
-        {
+        if let prevID, let newIndex = items.firstIndex(where: { $0.id == prevID }) {
             selectedIndex = newIndex
         } else {
-            normalizeSelection()
+            clampSelection()
         }
     }
 
-    private func normalizeSelection() {
-        if items.isEmpty {
-            selectedIndex = 0
-        } else {
-            selectedIndex = min(selectedIndex, items.count - 1)
-        }
+    // MARK: - Private
+
+    private func clampSelection() {
+        selectedIndex = items.isEmpty ? 0 : min(selectedIndex, items.count - 1)
     }
 }

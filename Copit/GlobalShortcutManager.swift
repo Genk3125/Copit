@@ -1,59 +1,91 @@
 // GlobalShortcutManager.swift
-// CGEventTap を使ってアプリが裏にいてもグローバルショートカットを検知する
-// アクセシビリティ権限 (Accessibility) が必須
+// CGEventTap を使ったグローバルショートカット検知
+//
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
+//
+// ─── 問題の解説 ───────────────────────────────────────────────────
+// SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor を有効にすると、
+// モジュール内の全宣言が暗黙的に @MainActor になる。
+// しかし CGEventTap のコールバックは @convention(c) であり、
+// Swift の型システム上は "nonisolated" なコンテキスト。
+// → @MainActor なメソッドを直接呼べずコンパイルエラーになる。
+//
+// ─── 解決策 ────────────────────────────────────────────────────────
+// 1. EventTap の生ポインタ関連プロパティに nonisolated(unsafe) を付与
+//    → nonisolated なコンテキストからでもアクセス可能にする
+// 2. コールバックから呼ばれるメソッドに nonisolated を付与
+// 3. @MainActor が必要な処理は Task { @MainActor in } で安全にディスパッチ
+// ─────────────────────────────────────────────────────────────────
 
 import AppKit
 
+// MARK: - GlobalShortcutManager
+
+/// モジュール全体が @MainActor でも、CGEventTap 関連は
+/// nonisolated(unsafe) / nonisolated で明示的に管理する
 final class GlobalShortcutManager {
 
-    // MARK: - Callbacks
+    // MARK: - Callbacks（@MainActor コンテキストから設定する）
 
-    /// ⌘+Shift+C で取得できたテキストを渡すコールバック
+    /// ⌘⇧C で取得したテキストを渡すコールバック
     var onSpecialCopy: ((String) -> Void)?
 
-    /// ⌘+Shift+V でペーストUIの表示を要求するコールバック
+    /// ⌘⇧V でパネル表示を要求するコールバック
     var onShowPasteUI: (() -> Void)?
 
-    // MARK: - Private
+    // MARK: - EventTap 関連（C コールバックからもアクセスするため nonisolated(unsafe)）
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    nonisolated(unsafe) private var eventTap: CFMachPort?
+    nonisolated(unsafe) private var runLoopSource: CFRunLoopSource?
 
-    // Virtual key codes (macOS 標準)
+    /// C コールバック経由で呼ばれる軽量ハンドラを格納
+    /// （@MainActor クロージャを直接呼ぶ代わりに Task で橋渡しする）
+    nonisolated(unsafe) private var tapHandler: ((CGEventType, CGEvent) -> CGEvent?)?
+
+    // MARK: - Constants
+
     private static let kVK_C: Int64 = 0x08
     private static let kVK_V: Int64 = 0x09
-    private static let syntheticEventTag: Int64 = 0x434F504954
+
+    /// 自前で合成したキーイベントを識別するタグ
+    nonisolated(unsafe) static let syntheticTag: Int64 = 0x434F504954
 
     // MARK: - Start / Stop
 
+    /// @MainActor コンテキストから呼ぶこと
     func start() {
         guard AXIsProcessTrusted() else {
-            print("[Copit] CGEventTap を作成できません: アクセシビリティ権限が付与されていません。")
+            print("[Copit] アクセシビリティ権限がありません。システム設定で許可してください。")
             return
         }
 
-        let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
-        // self を C コールバックの userInfo として渡す (unretained: AppDelegate が保持するため安全)
-        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-
-        // NOTE: CGEventTapCallBack は @convention(c) のため self をキャプチャ不可
-        //       userInfo 経由で self を取得する
-        let callback: CGEventTapCallBack = { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
-            guard let refcon else { return Unmanaged.passUnretained(event) }
-            let mgr = Unmanaged<GlobalShortcutManager>.fromOpaque(refcon).takeUnretainedValue()
-            return mgr.handleEvent(proxy: proxy, type: type, event: event)
+        // C コールバックから呼ぶためのハンドラを nonisolated(unsafe) に格納
+        tapHandler = { [weak self] type, event in
+            self?.processEvent(type: type, event: event)
         }
 
-        let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,        // セッション全体を監視
-            place: .headInsertEventTap,      // イベントチェーンの先頭に挿入
-            options: .defaultTap,            // イベントを消費可能
+        let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
+        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        // @convention(c) クロージャ: self をキャプチャ不可 → refcon 経由で取得
+        let callback: CGEventTapCallBack = { _, type, event, refcon -> Unmanaged<CGEvent>? in
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let mgr = Unmanaged<GlobalShortcutManager>.fromOpaque(refcon).takeUnretainedValue()
+            // nonisolated メソッドを呼ぶ（型システムが @convention(c) から許可する）
+            if let modified = mgr.handleFromTap(type: type, event: event) {
+                return Unmanaged.passRetained(modified)
+            }
+            return nil  // nil = イベントを消費（伝播させない）
+        }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: callback,
             userInfo: selfPtr
-        )
-
-        guard let tap else {
+        ) else {
             print("[Copit] CGEventTap の作成に失敗しました。アクセシビリティ権限を確認してください。")
             return
         }
@@ -63,7 +95,7 @@ final class GlobalShortcutManager {
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
 
-        print("[Copit] グローバルショートカットを登録しました (⌘⇧C / ⌘⇧V)")
+        print("[Copit] グローバルショートカット登録完了 (⌘⇧C / ⌘⇧V)")
     }
 
     func stop() {
@@ -74,154 +106,137 @@ final class GlobalShortcutManager {
         }
         eventTap = nil
         runLoopSource = nil
+        tapHandler = nil
     }
 
-    // MARK: - Event Handling
+    // MARK: - EventTap コールバック（nonisolated: @convention(c) から呼ばれる）
 
-    private func handleEvent(
-        proxy: CGEventTapProxy,
-        type: CGEventType,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
+    /// CGEventTap の C コールバックから直接呼ばれる。
+    /// nonisolated にすることで @convention(c) コンテキストから呼び出し可能。
+    /// @MainActor が必要な処理は Task { @MainActor in } に委ねる。
+    nonisolated func handleFromTap(type: CGEventType, event: CGEvent) -> CGEvent? {
 
-        // タイムアウトや無効化でタップが止まった場合に再有効化
+        // タップが止まった場合に再有効化
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return Unmanaged.passUnretained(event)
+            return event
         }
 
-        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+        guard type == .keyDown else { return event }
 
-        let flags   = event.flags
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let flags    = event.flags
+        let keyCode  = event.getIntegerValueField(.keyboardEventKeycode)
         let userData = event.getIntegerValueField(.eventSourceUserData)
+
+        // 自前で合成したキーは素通り
+        if userData == GlobalShortcutManager.syntheticTag { return event }
 
         let hasCmd   = flags.contains(.maskCommand)
         let hasShift = flags.contains(.maskShift)
         let hasAlt   = flags.contains(.maskAlternate)
         let hasCtrl  = flags.contains(.maskControl)
 
-        // 自前で合成したキーは通常のショートカット判定から除外する
-        if userData == Self.syntheticEventTag {
-            return Unmanaged.passUnretained(event)
-        }
-
-        guard hasCmd, !hasAlt, !hasCtrl else {
-            return Unmanaged.passUnretained(event)
-        }
+        guard hasCmd, !hasAlt, !hasCtrl else { return event }
 
         if hasShift {
-            // ─────────────────────────────────────────
-            // ⌘ + Shift + C → 特殊コピー
-            // ─────────────────────────────────────────
-            if keyCode == Self.kVK_C {
-                DispatchQueue.main.async { [weak self] in
-                    self?.performSpecialCopy()
-                }
-                return nil
+            // ⌘⇧C → 特殊コピー
+            if keyCode == GlobalShortcutManager.kVK_C {
+                Task { @MainActor [weak self] in self?.performSpecialCopy() }
+                return nil  // イベントを消費
             }
-
-            // ─────────────────────────────────────────
-            // ⌘ + Shift + V → ペーストUI表示
-            // ─────────────────────────────────────────
-            if keyCode == Self.kVK_V {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onShowPasteUI?()
-                }
-                return nil
+            // ⌘⇧V → ペーストUI表示
+            if keyCode == GlobalShortcutManager.kVK_V {
+                Task { @MainActor [weak self] in self?.onShowPasteUI?() }
+                return nil  // イベントを消費
             }
-
-            return Unmanaged.passUnretained(event)
+            return event
         }
 
-        if keyCode == Self.kVK_C {
-            return Unmanaged.passUnretained(event)
+        // ⌘V → ペースト音
+        if keyCode == GlobalShortcutManager.kVK_V {
+            Task { @MainActor in SoundManager.shared.playPaste() }
+            return event  // ⌘V 自体は通常通り伝播
         }
 
-        if keyCode == Self.kVK_V {
-            DispatchQueue.main.async {
-                SoundManager.shared.playPaste()
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
-        return Unmanaged.passUnretained(event)
+        return event
     }
+
+    // MARK: - 特殊コピー処理（@MainActor）
 
     private func performSpecialCopy() {
         let pasteboard = NSPasteboard.general
-        let previousSnapshot = PasteboardSnapshot(pasteboard: pasteboard)
-        let previousChangeCount = pasteboard.changeCount
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+        let countBefore = pasteboard.changeCount
 
-        postCommandKey(keyCode: CGKeyCode(Self.kVK_C))
+        // 仮想 ⌘C を送信してテキストをコピーさせる
+        postSyntheticCmd(keyCode: CGKeyCode(GlobalShortcutManager.kVK_C))
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+        // クリップボードが更新されるのを少し待つ
+        Task { @MainActor [weak self] in
             guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(180))
 
-            let copiedText = pasteboard.string(forType: .string)?
+            let copied = pasteboard.string(forType: .string)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
+            // クリップボードを元に戻す（成否に関わらず必ず実行）
             defer {
                 ClipboardWatcher.shared.ignoreNextOwnWrite()
-                previousSnapshot.restore(to: pasteboard)
+                snapshot.restore(to: pasteboard)
             }
 
             guard
-                pasteboard.changeCount != previousChangeCount,
-                let copiedText,
-                !copiedText.isEmpty
-            else {
-                return
-            }
+                pasteboard.changeCount != countBefore,
+                let copied,
+                !copied.isEmpty
+            else { return }
 
-            self.onSpecialCopy?(copiedText)
+            self.onSpecialCopy?(copied)
             SoundManager.shared.playSpecialCopy()
         }
     }
 
-    private func postCommandKey(keyCode: CGKeyCode) {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+    // MARK: - 仮想キー送信（@MainActor）
 
-        keyDown?.flags = .maskCommand
-        keyUp?.flags = .maskCommand
-        keyDown?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-        keyUp?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
+    private func postSyntheticCmd(keyCode: CGKeyCode) {
+        let src  = CGEventSource(stateID: .hidSystemState)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
+        let up   = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
 
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        down?.flags = .maskCommand
+        up?.flags   = .maskCommand
+        down?.setIntegerValueField(.eventSourceUserData, value: GlobalShortcutManager.syntheticTag)
+        up?.setIntegerValueField(.eventSourceUserData,   value: GlobalShortcutManager.syntheticTag)
+
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 }
 
-private struct PasteboardSnapshot {
+// MARK: - PasteboardSnapshot
+
+/// クリップボードの内容を丸ごとスナップショット化して復元するユーティリティ
+/// Sendable: Task 境界を越えて安全に渡せる
+private struct PasteboardSnapshot: Sendable {
+
     private let contents: [[NSPasteboard.PasteboardType: Data]]
 
     init(pasteboard: NSPasteboard) {
         contents = pasteboard.pasteboardItems?.map { item in
-            var snapshot: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    snapshot[type] = data
-                }
-            }
-            return snapshot
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            })
         } ?? []
     }
 
     func restore(to pasteboard: NSPasteboard) {
         pasteboard.clearContents()
-
         guard !contents.isEmpty else { return }
-
-        let items = contents.map { snapshot -> NSPasteboardItem in
+        let items = contents.map { dict -> NSPasteboardItem in
             let item = NSPasteboardItem()
-            for (type, data) in snapshot {
-                item.setData(data, forType: type)
-            }
+            for (type, data) in dict { item.setData(data, forType: type) }
             return item
         }
-
         pasteboard.writeObjects(items)
     }
 }
