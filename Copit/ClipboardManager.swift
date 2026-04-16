@@ -1,14 +1,14 @@
 // ClipboardManager.swift
-// コピット専用のクリップボード履歴を管理するシングルトン
-// 通常の NSPasteboard 履歴とは完全に独立して動作する
+// コピット専用クリップボード履歴管理シングルトン
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import Foundation
-import Combine
 
 // MARK: - ClipItem
 
-/// コピットの履歴アイテム
-struct ClipItem: Identifiable, Equatable {
+/// クリップボード履歴の1件分のデータ
+/// Sendable: Task/非同期境界を越えて安全に渡せる値型
+struct ClipItem: Identifiable, Equatable, Sendable {
     let id: UUID
     let text: String
     let createdAt: Date
@@ -24,35 +24,29 @@ struct ClipItem: Identifiable, Equatable {
 
 // MARK: - ClipboardManager
 
+/// @MainActor: UI スレッドで @Published を安全に更新するため
+@MainActor
 final class ClipboardManager: ObservableObject {
 
     static let shared = ClipboardManager()
 
-    // 最新のアイテムが先頭に来るリスト
     @Published private(set) var items: [ClipItem] = []
 
-    private let maxItems = 10  // 通常履歴として保持する最大件数
+    private let maxNonFavorites = 10
 
     private init() {}
 
     // MARK: - Public API
 
-    /// テキストを履歴の先頭に追加する
-    /// - 重複テキストが存在する場合は既存を削除して先頭に移動
-    /// - 空白のみのテキストは無視
+    /// テキストを履歴の先頭に追加（重複は先頭へ移動、空白のみは無視）
     func add(text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let existingFavorite = items.first { $0.text == trimmed }?.isFavorite ?? false
-
-        // 重複を除去（同一テキストを先頭に移動する挙動）
+        let wasFavorite = items.first(where: { $0.text == trimmed })?.isFavorite ?? false
         items.removeAll { $0.text == trimmed }
-
-        // 先頭に追加（最新が上）
-        items.insert(ClipItem(text: trimmed, isFavorite: existingFavorite), at: 0)
-
-        trimNonFavoriteItems()
+        items.insert(ClipItem(text: trimmed, isFavorite: wasFavorite), at: 0)
+        trimOverflow()
     }
 
     /// 全履歴を削除
@@ -60,25 +54,25 @@ final class ClipboardManager: ObservableObject {
         items.removeAll()
     }
 
-    /// 特定のアイテムを削除
+    /// 指定IDのアイテムを削除
     func remove(id: UUID) {
         items.removeAll { $0.id == id }
     }
 
-    /// お気に入り状態を切り替える
+    /// お気に入り状態をトグル
     func toggleFavorite(id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].isFavorite.toggle()
-        trimNonFavoriteItems()
+        trimOverflow()
     }
 
-    private func trimNonFavoriteItems() {
-        let nonFavoriteIndices = items.indices.filter { !items[$0].isFavorite }
-        guard nonFavoriteIndices.count > maxItems else { return }
+    // MARK: - Private
 
-        let overflow = nonFavoriteIndices.count - maxItems
-        let indicesToRemove = Array(nonFavoriteIndices.suffix(overflow)).sorted(by: >)
-        for index in indicesToRemove {
+    private func trimOverflow() {
+        let nonFavIdx = items.indices.filter { !items[$0].isFavorite }
+        guard nonFavIdx.count > maxNonFavorites else { return }
+        let overflow = nonFavIdx.count - maxNonFavorites
+        for index in nonFavIdx.suffix(overflow).sorted(by: >) {
             items.remove(at: index)
         }
     }

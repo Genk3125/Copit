@@ -1,74 +1,69 @@
 // CopitListView.swift
 // ペーストUIのSwiftUIビュー
-// IMEの変換候補選択ウィンドウをモデルにしたシンプルなリスト
+// IME変換候補ウィンドウ風のシンプルなリスト
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import SwiftUI
 
-// MARK: - CopitListView (Root)
+// MARK: - CopitListView
 
 struct CopitListView: View {
 
     @ObservedObject var viewModel: CopitViewModel
 
-    var onPaste: () -> Void
-    var onHide:  () -> Void
-    var onDeleteSelected: () -> Void
-    var onToggleFavoriteSelected: () -> Void
+    let onPaste: () -> Void
+    let onHide:  () -> Void
+    let onDeleteSelected: () -> Void
+    let onToggleFavoriteSelected: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // ─── 背景: すりガラス風エフェクト ───
+            // すりガラス背景
             VisualEffectBackground()
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 8)
 
-            // ─── コンテンツ ───
             VStack(spacing: 0) {
-                // ヘッダー
-                HStack {
-                    Image(systemName: "doc.on.clipboard.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    Text("コピット")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("⌘⇧V")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-
-                Divider()
-                    .opacity(0.3)
-
-                // リスト本体
+                header
+                Divider().opacity(0.3)
                 if viewModel.items.isEmpty {
-                    emptyStateView
+                    emptyState
                 } else {
                     listContent
                 }
-
-                Divider()
-                    .opacity(0.3)
-
-                // フッター: 操作ヒント
-                footerHints
+                Divider().opacity(0.3)
+                footer
             }
         }
         .frame(width: 360)
         .frame(maxHeight: 250)
-        // パネルの背景が透明なので、このビュー自体に角丸クリップをかける
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        // Padding はパネル側の透明部分として機能（影のスペースを確保）
         .padding(12)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack {
+            Image(systemName: "doc.on.clipboard.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Text("コピット")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Spacer()
+            Text("⌘⇧V")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.6))
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Empty State
 
-    private var emptyStateView: some View {
+    private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
                 .font(.system(size: 28))
@@ -112,7 +107,6 @@ struct CopitListView: View {
                 .padding(.vertical, 4)
             }
             .frame(maxHeight: 160)
-            // 選択アイテムが変わったときスクロールして見えるようにする
             .onChange(of: viewModel.selectedIndex) { _, newIndex in
                 withAnimation(.easeInOut(duration: 0.1)) {
                     proxy.scrollTo(newIndex, anchor: .center)
@@ -123,13 +117,13 @@ struct CopitListView: View {
 
     // MARK: - Footer
 
-    private var footerHints: some View {
+    private var footer: some View {
         HStack(spacing: 6) {
             HintLabel(key: "Space/↑↓", desc: "移動")
-            HintLabel(key: "Enter", desc: "ペースト")
-            HintLabel(key: "F", desc: "星")
-            HintLabel(key: "Del/X", desc: "削除")
-            HintLabel(key: "Esc", desc: "閉じる")
+            HintLabel(key: "Enter",    desc: "ペースト")
+            HintLabel(key: "F",        desc: "星")
+            HintLabel(key: "Del/X",    desc: "削除")
+            HintLabel(key: "Esc",      desc: "閉じる")
             Spacer()
             Text("\(viewModel.items.filter { !$0.isFavorite }.count)/10")
                 .font(.system(size: 10))
@@ -146,37 +140,32 @@ struct CopitListView: View {
 
 struct CopitItemRow: View {
 
-    private let previewCharacterLimit = 22
+    private let maxPreviewChars = 22
 
     let item: ClipItem
     let index: Int
     let isSelected: Bool
     let onToggleFavorite: () -> Void
 
-    // 表示用テキスト: 改行や連続空白を潰したうえで長文を省略表示
     private var displayText: String {
-        let singleLine = item.text
+        let single = item.text
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-
-        guard singleLine.count > previewCharacterLimit else {
-            return singleLine
-        }
-
-        return String(singleLine.prefix(previewCharacterLimit)) + "..."
+        return single.count > maxPreviewChars
+            ? String(single.prefix(maxPreviewChars)) + "..."
+            : single
     }
 
-    // 複数行かどうかのインジケーター
-    private var hasMultipleLines: Bool {
+    private var isMultiLine: Bool {
         item.text.components(separatedBy: .newlines).count > 1
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            // インデックスバッジ（1〜9はキーボードショートカットを想起させるデザイン）
+            // インデックスバッジ
             Text(index < 9 ? "\(index + 1)" : "•")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundColor(isSelected ? .white.opacity(0.75) : .secondary.opacity(0.5))
@@ -191,12 +180,13 @@ struct CopitItemRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // 複数行インジケーター
-            if hasMultipleLines {
+            if isMultiLine {
                 Image(systemName: "text.alignleft")
                     .font(.system(size: 9))
                     .foregroundColor(isSelected ? .white.opacity(0.6) : .secondary.opacity(0.4))
             }
 
+            // お気に入りボタン
             Button(action: onToggleFavorite) {
                 Image(systemName: item.isFavorite ? "star.fill" : "star")
                     .font(.system(size: 11, weight: .semibold))
@@ -230,23 +220,23 @@ struct CopitItemRow: View {
     }
 }
 
-// MARK: - Visual Effect Background
+// MARK: - VisualEffectBackground
 
 struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.blendingMode = .behindWindow   // ウィンドウの背後とブレンド
+        v.blendingMode = .behindWindow
         v.state        = .active
-        v.material     = .hudWindow      // HUD風の暗めのすりガラス
+        v.material     = .hudWindow
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
-// MARK: - Hint Label
+// MARK: - HintLabel
 
 struct HintLabel: View {
-    let key: String
+    let key:  String
     let desc: String
 
     var body: some View {
@@ -278,7 +268,7 @@ struct HintLabel: View {
     vm.items = [
         ClipItem(text: "Hello, World!"),
         ClipItem(text: "SwiftUI で macOS アプリ開発", isFavorite: true),
-        ClipItem(text: "Lorem ipsum dolor sit amet consectetur\nadipiscing elit sed do eiusmod"),
+        ClipItem(text: "Lorem ipsum dolor sit amet consectetur\nadipiscing elit"),
         ClipItem(text: "第四の文字列サンプルテキスト"),
         ClipItem(text: "Another clipboard entry for testing"),
     ]
@@ -291,5 +281,5 @@ struct HintLabel: View {
         onDeleteSelected: {},
         onToggleFavoriteSelected: {}
     )
-        .frame(width: 440, height: 420)
+    .frame(width: 440, height: 420)
 }

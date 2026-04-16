@@ -1,22 +1,27 @@
 // CopitPanelController.swift
-// フローティングパネルの構築・表示・キー操作・ペースト実行を担当
+// フローティングパネルの構築・表示・キー操作・ペースト実行
+// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
 
 import AppKit
 import SwiftUI
 
 // MARK: - CopitPanel
 
-/// キーウィンドウになれるカスタム NSPanel
-/// borderless スタイルでは canBecomeKey が false になるため明示的にオーバーライド
+/// borderless スタイルでもキーウィンドウになれるカスタム NSPanel
 final class CopitPanel: NSPanel {
-    override var canBecomeKey: Bool  { true  }
+    override var canBecomeKey:  Bool { true  }
     override var canBecomeMain: Bool { false }
 }
 
 // MARK: - CopitPanelController
 
+/// @MainActor: AppKit UI は全てメインスレッドで操作するため
+@MainActor
 final class CopitPanelController {
-    private static let syntheticEventTag: Int64 = 0x434F504954
+
+    // MARK: - 仮想キー送信タグ
+
+    private static let syntheticTag: Int64 = 0x434F504954
 
     // MARK: - Properties
 
@@ -24,11 +29,10 @@ final class CopitPanelController {
     let viewModel = CopitViewModel()
 
     private var panel: CopitPanel?
-    private var previousApp: NSRunningApplication?  // ペースト先アプリ
-    private var localMonitor: Any?                   // キーイベント監視
-    private var resignObserver: NSObjectProtocol?    // フォーカス喪失監視
+    private var previousApp: NSRunningApplication?
+    private var localMonitor: Any?
+    private var resignObserver: NSObjectProtocol?
 
-    // パネルサイズ定数
     private let panelWidth:  CGFloat = 384
     private let panelHeight: CGFloat = 274
 
@@ -41,34 +45,24 @@ final class CopitPanelController {
     // MARK: - Show
 
     func show() {
-        // ペースト先アプリを記憶（パネル表示前に保存）
         previousApp = NSWorkspace.shared.frontmostApplication
-
-        // 最新の履歴をViewModelに同期
         viewModel.load(from: clipboardManager.items)
 
-        // パネルを初回作成
         if panel == nil { buildPanel() }
-
-        // マウスカーソル付近に配置
         positionPanel()
 
-        // 表示 & フォーカス取得
         panel?.alphaValue = 0
         panel?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // フェードイン
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.12
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel?.animator().alphaValue = 1
         }
 
-        // キーボード監視開始
         startKeyMonitor()
 
-        // パネルがキーウィンドウを失ったとき（外クリックなど）に自動で閉じる
         if let panel {
             resignObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didResignKeyNotification,
@@ -90,7 +84,6 @@ final class CopitPanelController {
             resignObserver = nil
         }
 
-        // フェードアウト
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.08
             self.panel?.animator().alphaValue = 0
@@ -100,59 +93,56 @@ final class CopitPanelController {
         }
     }
 
-    // MARK: - Paste Execution
+    // MARK: - Paste
 
     func pasteSelectedItem() {
         guard let text = viewModel.selectedItem?.text else { return }
 
-        // 1. 選択テキストをシステムクリップボードにセット
-        let pb = NSPasteboard.general
+        // 1. 選択テキストをクリップボードにセット
         ClipboardWatcher.shared.ignoreNextOwnWrite()
+        let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
 
-        // 2. UIを閉じる
+        // 2. パネルを閉じる
         hide()
 
-        // 2.5 ペースト音を鳴らす 🔊
+        // 3. ペースト音
         SoundManager.shared.playPaste()
 
-        // 3. 元のアプリをアクティブ化してから ⌘V を送信
+        // 4. 元アプリをアクティブ化してから ⌘V を送信
         let target = previousApp
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
             target?.activate()
-            // アプリのアクティブ化を少し待つ
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                self.postCmdV()
-            }
+            try? await Task.sleep(for: .milliseconds(80))
+            self.postCmdV()
         }
     }
 
-    // MARK: - ⌘V シミュレート
+    // MARK: - ⌘V 送信
 
     private func postCmdV() {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let vKey: CGKeyCode = 0x09  // V キー
+        let src  = CGEventSource(stateID: .hidSystemState)
+        let vKey: CGKeyCode = 0x09
 
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true)
-        let keyUp   = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
+        let up   = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
 
-        keyDown?.flags = .maskCommand
-        keyUp?.flags   = .maskCommand
-        keyDown?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
-        keyUp?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
+        down?.flags = .maskCommand
+        up?.flags   = .maskCommand
+        down?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
+        up?.setIntegerValueField(.eventSourceUserData,   value: Self.syntheticTag)
 
-        // cghidEventTap: ハードウェアイベントとして注入（最も互換性が高い）
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 
-    // MARK: - Keyboard Monitor
+    // MARK: - キーボード監視
 
     private func startKeyMonitor() {
-        // NSEvent ローカルモニター: パネルがキーウィンドウのとき有効
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            return self?.handleKeyEvent(event)
+            self?.handleKeyEvent(event)
         }
     }
 
@@ -164,43 +154,35 @@ final class CopitPanelController {
     }
 
     private func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
+        let noMod = event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+
         switch event.keyCode {
-        case 49:       // Space   → 下に移動
+        case 49, 125:    // Space / ↓ → 下へ
             viewModel.moveDown()
             return nil
 
-        case 125:      // ↓ Arrow → 下に移動
-            viewModel.moveDown()
-            return nil
-
-        case 126:      // ↑ Arrow → 上に移動
+        case 126:        // ↑ → 上へ
             viewModel.moveUp()
             return nil
 
-        case 36, 76:   // Return / Enter → ペースト実行
+        case 36, 76:     // Return / Enter → ペースト
             pasteSelectedItem()
             return nil
 
-        case 53:       // Escape → キャンセル
+        case 53:         // Escape → キャンセル
             hide()
             return nil
 
-        case 51, 117:  // Delete / Forward Delete → 削除
-            deleteSelectedItem()
+        case 51, 117:    // Delete / Forward Delete → 削除
+            deleteSelected()
             return nil
 
-        case 7:        // X → 削除
-            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
-                deleteSelectedItem()
-                return nil
-            }
+        case 7:          // X（修飾キーなし）→ 削除
+            if noMod { deleteSelected(); return nil }
             return event
 
-        case 3:        // F → お気に入り切り替え
-            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
-                toggleFavoriteForSelectedItem()
-                return nil
-            }
+        case 3:          // F（修飾キーなし）→ お気に入りトグル
+            if noMod { toggleFavoriteSelected(); return nil }
             return event
 
         default:
@@ -208,67 +190,9 @@ final class CopitPanelController {
         }
     }
 
-    // MARK: - Panel Construction
+    // MARK: - アイテム操作
 
-    private func buildPanel() {
-        let panel = CopitPanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-
-        panel.isReleasedWhenClosed = false
-        panel.level               = .floating        // 他のウィンドウより前面に表示
-        panel.backgroundColor     = .clear
-        panel.isOpaque            = false
-        panel.hasShadow           = false             // 影はSwiftUI側で描画
-        panel.animationBehavior   = .utilityWindow
-        // 全スペース・フルスクリーンでも表示
-        panel.collectionBehavior  = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        // SwiftUI ビューを埋め込む
-        let rootView = CopitListView(
-            viewModel: viewModel,
-            onPaste: { [weak self] in self?.pasteSelectedItem() },
-            onHide:  { [weak self] in self?.hide() },
-            onDeleteSelected: { [weak self] in self?.deleteSelectedItem() },
-            onToggleFavoriteSelected: { [weak self] in self?.toggleFavoriteForSelectedItem() }
-        )
-
-        let hosting = NSHostingView(rootView: rootView)
-        hosting.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
-        panel.contentView = hosting
-
-        self.panel = panel
-    }
-
-    // MARK: - Positioning
-
-    private func positionPanel() {
-        guard let panel else { return }
-
-        // メインスクリーン（マウスがいるスクリーン）を取得
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-            ?? NSScreen.main
-        guard let screen else { return }
-
-        let mouse   = NSEvent.mouseLocation
-        let size    = CGSize(width: panelWidth, height: panelHeight)
-        let sf      = screen.visibleFrame
-
-        // カーソルの少し上に表示（IME変換候補ウィンドウ風）
-        var x = mouse.x - size.width  / 2
-        var y = mouse.y + 20           // カーソルの上方向にオフセット
-
-        // スクリーン境界を超えないようにクランプ
-        x = max(sf.minX + 10, min(x, sf.maxX - size.width  - 10))
-        y = max(sf.minY + 10, min(y, sf.maxY - size.height - 10))
-
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
-    }
-
-    private func deleteSelectedItem() {
+    private func deleteSelected() {
         guard let id = viewModel.removeSelectedItem() else { return }
         clipboardManager.remove(id: id)
 
@@ -279,9 +203,60 @@ final class CopitPanelController {
         }
     }
 
-    private func toggleFavoriteForSelectedItem() {
+    private func toggleFavoriteSelected() {
         guard let id = viewModel.toggleFavoriteForSelectedItem() else { return }
         clipboardManager.toggleFavorite(id: id)
         viewModel.load(from: clipboardManager.items)
+    }
+
+    // MARK: - パネル構築
+
+    private func buildPanel() {
+        let p = CopitPanel(
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        p.isReleasedWhenClosed = false
+        p.level               = .floating
+        p.backgroundColor     = .clear
+        p.isOpaque            = false
+        p.hasShadow           = false
+        p.animationBehavior   = .utilityWindow
+        p.collectionBehavior  = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let rootView = CopitListView(
+            viewModel: viewModel,
+            onPaste:                 { [weak self] in self?.pasteSelectedItem() },
+            onHide:                  { [weak self] in self?.hide() },
+            onDeleteSelected:        { [weak self] in self?.deleteSelected() },
+            onToggleFavoriteSelected:{ [weak self] in self?.toggleFavoriteSelected() }
+        )
+
+        let hosting = NSHostingView(rootView: rootView)
+        hosting.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
+        p.contentView = hosting
+
+        panel = p
+    }
+
+    // MARK: - パネル位置決め
+
+    private func positionPanel() {
+        guard let panel else { return }
+
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        guard let screen else { return }
+
+        let sf = screen.visibleFrame
+        var x = mouse.x - panelWidth  / 2
+        var y = mouse.y + 20
+
+        x = max(sf.minX + 10, min(x, sf.maxX - panelWidth  - 10))
+        y = max(sf.minY + 10, min(y, sf.maxY - panelHeight - 10))
+
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
