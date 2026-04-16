@@ -55,15 +55,21 @@ final class CopitPanelController {
         panel?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
+        // assumeIsolated: NSAnimationContext はメインスレッドで同期実行されるため安全
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel?.animator().alphaValue = 1
+            MainActor.assumeIsolated {
+                ctx.duration = 0.12
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.panel?.animator().alphaValue = 1
+            }
         }
 
-        startKeyMonitor()
+        // ⌘⇧V 連打で show() が重複呼び出しされても監視を二重登録しない
+        if localMonitor == nil {
+            startKeyMonitor()
+        }
 
-        if let panel {
+        if resignObserver == nil, let panel {
             resignObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didResignKeyNotification,
                 object: panel,
@@ -85,11 +91,15 @@ final class CopitPanelController {
         }
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.08
-            self.panel?.animator().alphaValue = 0
+            MainActor.assumeIsolated {
+                ctx.duration = 0.08
+                self.panel?.animator().alphaValue = 0
+            }
         } completionHandler: {
-            self.panel?.orderOut(nil)
-            self.panel?.alphaValue = 1
+            MainActor.assumeIsolated {
+                self.panel?.orderOut(nil)
+                self.panel?.alphaValue = 1
+            }
         }
     }
 

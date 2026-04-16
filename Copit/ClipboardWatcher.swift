@@ -25,8 +25,11 @@ final class ClipboardWatcher {
         guard timer == nil else { return }
         lastChangeCount = NSPasteboard.general.changeCount
 
+        // Timer ブロックは @Sendable だが RunLoop.main に追加するためメインスレッドで発火する。
+        // assumeIsolated で @MainActor 隔離を明示し、actor 境界警告を解消する。
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.poll()
+            guard let self else { return }
+            MainActor.assumeIsolated { self.poll() }
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t

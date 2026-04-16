@@ -262,7 +262,9 @@ struct HintLabel: View {
 }
 
 // MARK: - Preview
+// #if DEBUG で囲むことでヘッドレス/CI 環境でのビルド失敗を防ぐ
 
+#if DEBUG
 #Preview {
     let vm = CopitViewModel()
     vm.items = [
@@ -283,3 +285,4 @@ struct HintLabel: View {
     )
     .frame(width: 440, height: 420)
 }
+#endif

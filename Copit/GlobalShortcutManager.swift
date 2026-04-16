@@ -38,10 +38,6 @@ final class GlobalShortcutManager {
     nonisolated(unsafe) private var eventTap: CFMachPort?
     nonisolated(unsafe) private var runLoopSource: CFRunLoopSource?
 
-    /// C コールバック経由で呼ばれる軽量ハンドラを格納
-    /// （@MainActor クロージャを直接呼ぶ代わりに Task で橋渡しする）
-    nonisolated(unsafe) private var tapHandler: ((CGEventType, CGEvent) -> CGEvent?)?
-
     // MARK: - Constants
 
     private static let kVK_C: Int64 = 0x08
@@ -59,11 +55,6 @@ final class GlobalShortcutManager {
             return
         }
 
-        // C コールバックから呼ぶためのハンドラを nonisolated(unsafe) に格納
-        tapHandler = { [weak self] type, event in
-            self?.processEvent(type: type, event: event)
-        }
-
         let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
         let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
@@ -73,7 +64,9 @@ final class GlobalShortcutManager {
             let mgr = Unmanaged<GlobalShortcutManager>.fromOpaque(refcon).takeUnretainedValue()
             // nonisolated メソッドを呼ぶ（型システムが @convention(c) から許可する）
             if let modified = mgr.handleFromTap(type: type, event: event) {
-                return Unmanaged.passRetained(modified)
+                // passUnretained: 元イベントはシステムが所有する。
+                // passRetained にするとキー入力ごとに retain count が増え、リークする。
+                return Unmanaged.passUnretained(modified)
             }
             return nil  // nil = イベントを消費（伝播させない）
         }
@@ -106,7 +99,6 @@ final class GlobalShortcutManager {
         }
         eventTap = nil
         runLoopSource = nil
-        tapHandler = nil
     }
 
     // MARK: - EventTap コールバック（nonisolated: @convention(c) から呼ばれる）
