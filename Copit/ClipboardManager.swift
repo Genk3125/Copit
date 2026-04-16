@@ -1,79 +1,81 @@
-// ClipboardManager.swift
-// コピット専用クリップボード履歴管理シングルトン
-// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
-
-import Foundation
+import AppKit
 
 // MARK: - ClipItem
 
-/// クリップボード履歴の1件分のデータ
-/// Sendable: Task/非同期境界を越えて安全に渡せる値型
 struct ClipItem: Identifiable, Equatable, Sendable {
-    let id: UUID
+    let id = UUID()
     let text: String
-    let createdAt: Date
-    var isFavorite: Bool
-
-    init(text: String, isFavorite: Bool = false) {
-        self.id = UUID()
-        self.text = text
-        self.createdAt = Date()
-        self.isFavorite = isFavorite
-    }
+    var isFavorite = false
 }
 
 // MARK: - ClipboardManager
 
-/// @MainActor: UI スレッドで @Published を安全に更新するため
 @MainActor
 final class ClipboardManager: ObservableObject {
-
     static let shared = ClipboardManager()
 
     @Published private(set) var items: [ClipItem] = []
 
-    private let maxNonFavorites = 10
+    private var timer: Timer?
+    private var lastCount: Int
+    private var skipCount: Int?
 
-    private init() {}
+    private init() { lastCount = NSPasteboard.general.changeCount }
 
-    // MARK: - Public API
+    // MARK: 監視
 
-    /// テキストを履歴の先頭に追加（重複は先頭へ移動、空白のみは無視）
-    func add(text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let wasFavorite = items.first(where: { $0.text == trimmed })?.isFavorite ?? false
-        items.removeAll { $0.text == trimmed }
-        items.insert(ClipItem(text: trimmed, isFavorite: wasFavorite), at: 0)
-        trimOverflow()
+    func startWatching() {
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.poll() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
-    /// 全履歴を削除
-    func clear() {
-        items.removeAll()
+    func ignoreNextWrite() { skipCount = NSPasteboard.general.changeCount + 1 }
+
+    private func poll() {
+        let c = NSPasteboard.general.changeCount
+        guard c != lastCount else { return }
+        let prev = lastCount
+        lastCount = c
+        if let s = skipCount, c == s { skipCount = nil; return }
+        if c > prev { play("Frog") }
     }
 
-    /// 指定IDのアイテムを削除
-    func remove(id: UUID) {
-        items.removeAll { $0.id == id }
+    // MARK: 履歴操作
+
+    func add(_ text: String) {
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        let fav = items.first { $0.text == s }?.isFavorite ?? false
+        items.removeAll { $0.text == s }
+        items.insert(ClipItem(text: s, isFavorite: fav), at: 0)
+        trim()
     }
 
-    /// お気に入り状態をトグル
-    func toggleFavorite(id: UUID) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        items[index].isFavorite.toggle()
-        trimOverflow()
+    func clear() { items.removeAll() }
+    func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+
+    func toggleFavorite(_ id: UUID) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].isFavorite.toggle()
+        trim()
     }
 
-    // MARK: - Private
-
-    private func trimOverflow() {
-        let nonFavIdx = items.indices.filter { !items[$0].isFavorite }
-        guard nonFavIdx.count > maxNonFavorites else { return }
-        let overflow = nonFavIdx.count - maxNonFavorites
-        for index in nonFavIdx.suffix(overflow).sorted(by: >) {
-            items.remove(at: index)
+    private func trim() {
+        var count = 0
+        items = items.filter { item in
+            if item.isFavorite { return true }
+            count += 1
+            return count <= 10
         }
     }
+}
+
+// MARK: - サウンド
+
+func play(_ name: String) {
+    NSSound(contentsOfFile: "/System/Library/Sounds/\(name).aiff", byReference: false)?.play()
 }

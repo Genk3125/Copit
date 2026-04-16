@@ -1,24 +1,17 @@
-// CopitListView.swift
-// ペーストUIのSwiftUIビュー
-// IME変換候補ウィンドウ風のシンプルなリスト
-// Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor 対応
-
 import SwiftUI
 
 // MARK: - CopitListView
 
 struct CopitListView: View {
 
-    @ObservedObject var viewModel: CopitViewModel
+    @ObservedObject var viewModel: PanelViewModel
 
-    let onPaste: () -> Void
-    let onHide:  () -> Void
-    let onDeleteSelected: () -> Void
+    let onPaste:                  () -> Void
+    let onDeleteSelected:         () -> Void
     let onToggleFavoriteSelected: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // すりガラス背景
             VisualEffectBackground()
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 8)
@@ -165,13 +158,11 @@ struct CopitItemRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // インデックスバッジ
             Text(index < 9 ? "\(index + 1)" : "•")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundColor(isSelected ? .white.opacity(0.75) : .secondary.opacity(0.5))
                 .frame(width: 16)
 
-            // テキストプレビュー
             Text(displayText)
                 .font(.system(size: 13))
                 .foregroundColor(isSelected ? .white : .primary)
@@ -179,14 +170,12 @@ struct CopitItemRow: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // 複数行インジケーター
             if isMultiLine {
                 Image(systemName: "text.alignleft")
                     .font(.system(size: 9))
                     .foregroundColor(isSelected ? .white.opacity(0.6) : .secondary.opacity(0.4))
             }
 
-            // お気に入りボタン
             Button(action: onToggleFavorite) {
                 Image(systemName: item.isFavorite ? "star.fill" : "star")
                     .font(.system(size: 11, weight: .semibold))
@@ -262,11 +251,10 @@ struct HintLabel: View {
 }
 
 // MARK: - Preview
-// #if DEBUG で囲むことでヘッドレス/CI 環境でのビルド失敗を防ぐ
 
 #if DEBUG
 #Preview {
-    let vm = CopitViewModel()
+    let vm = PanelViewModel()
     vm.items = [
         ClipItem(text: "Hello, World!"),
         ClipItem(text: "SwiftUI で macOS アプリ開発", isFavorite: true),
@@ -279,7 +267,6 @@ struct HintLabel: View {
     return CopitListView(
         viewModel: vm,
         onPaste: {},
-        onHide: {},
         onDeleteSelected: {},
         onToggleFavoriteSelected: {}
     )
